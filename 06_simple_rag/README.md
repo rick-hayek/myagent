@@ -7,7 +7,7 @@
 **学习内容**:
 - 学习 LangChain Document Loaders 的基本用法（如加载 TXT, PDF 等）。
 - 学习 Text Embeddings 模型将文本向量化的原理。
-- 结合简单的内存向量表示构建一个基本的 QA 检索问答链。
+- 结合基础的向量存储（如 `InMemoryVectorStore` 或 `FAISS`）在内存或本地进行 QA 检索。
 
 **技术栈**:
 - Python
