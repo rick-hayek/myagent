@@ -46,7 +46,7 @@
     *   **内容**: 实现一个基础的文档问答系统。结合简单向量存储（如 `InMemoryVectorStore` 或 `FAISS`）进行初步的 QA 检索。
 *   **目录**: `07_advanced_rag/`
     *   **目标**: 应对长文档与复杂查询。
-    *   **内容**: 引入向量数据库（如 Chroma），加入文档分块（Text Splitters）、多路召回与重排序（Reranking）等高级策略。
+    *   **内容**: 引入向量数据库（如 Chroma），加入文档分块（Text Splitters）、**混合检索（BM25 关键词 + 向量检索）**、多路召回与重排序（Reranking）等高级策略。
 
 ### Phase 5: 规划与复杂任务执行 (Planning & Execution)
 *   **前置**: Phase 1, Phase 2
