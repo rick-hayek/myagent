@@ -262,3 +262,259 @@ print("\n\n[诗歌创作完毕！]")
 
 > **恭喜！你已通关 Phase 1：大模型核心三剑客（API、Prompt、OutputParser）。**
 > 下一步，我们将进入真正让大模型变成 Agent (智能体) 的核心阶段：**Tool Calling (工具调用/函数调用)**。
+
+## Phase 2: 工具调用与外部交互 (Tool Calling)
+
+大模型本身只是一个“缸中之脑”，它没有外部实时信息，算数也经常因为幻觉算错。为了让它能解决现实问题，我们需要给它装上“手”和“脚”：也就是提供给它一系列严格规范的 Python 函数。
+
+### 步骤 1：给大模型打造第一批工具
+
+**目标**：理解 LangChain 是如何把普通的 Python 函数包装成大模型能看懂的硬核功能说明书（JSON Schema）的。
+
+**代码实现** (`02_calculator_agent/1_basic_tools.py`)：
+
+```python
+from langchain_core.tools import tool
+
+# @tool 装饰器是 LangChain 里极其核心的魔法
+@tool
+def multiply(a: int, b: int) -> int:
+    """这是一个乘法器。当你需要计算两个数字相乘时，请调用此工具。
+    Args:
+        a: 第一个被乘数
+        b: 第二个乘数
+    """
+    return a * b
+
+@tool
+def add(a: int, b: int) -> int:
+    """这是一个加法器。请用来计算两个数字相加的和。"""
+    return a + b
+
+tools = [multiply, add]
+
+print("工具在系统中的名称:", multiply.name)
+print("大模型看到的工具描述说明书:", multiply.description)
+print("\n[底层给大模型看的数据结构 (Schema)]:\n", multiply.args_schema.schema())
+
+result = multiply.invoke({"a": 3, "b": 4})
+print("\n[本地测试向工具传入参数调用: 3 * 4 =]:", result)
+```
+
+**核心观察**：
+`@tool` 装饰器会自动提取 Python 的**类型注解 (Type Hints)** 和文档说明 (**Docstrings**)，翻译成大模型底层的强结构签名。当你写 Agent 时，你的注释和类型是**写给 AI 读的说明书**，决定了它是否能正确触发和传参。
+
+---
+
+### 步骤 2：将工具绑定 (Bind) 给大模型
+
+**目标**：观察大模型在获得了工具的“说明书”之后，当遇到无法自己回答的问题（如大数相乘）时，它是如何改变行为模式的。
+
+**代码实现** (`02_calculator_agent/2_bind_tools_to_llm.py`)：
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.tools import tool
+
+load_dotenv()
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """这是一个乘法器。当你需要计算两个数字相乘时，请调用此工具。"""
+    return a * b
+
+@tool
+def add(a: int, b: int) -> int:
+    """这是一个加法器。请用来计算两个数字相加的和。"""
+    return a + b
+
+tools = [multiply, add]
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+# 【核心魔法】将工具说明书通过 API 底层告知大模型
+llm_with_tools = llm.bind_tools(tools)
+
+query = "计算123乘以456等于多少？然后再把25加上13算算等于多少？"
+response = llm_with_tools.invoke(query)
+
+print("\n[大模型返回的文本内容 response.content]:\n", response.content)
+print("\n[大模型返回的工具调用 response.tool_calls]:\n", response.tool_calls)
+```
+
+#### ⚠️ 极其关键的核心认知破局
+
+> **问：代码跑完了，可是大模型为什么没有告诉我 123 乘以 456 的结果？！**
+
+如果你有这个疑问，恭喜你，你已经接触到了 AI Agent 最最核心的本质规律：**大模型本身是不具备执行代码的能力的。它只是一个“大脑”。**
+
+在上面的输出中，你会发现 `response.content` (自然语言回复) 是**完全空白**的！
+而 `response.tool_calls` 里却多了一串清晰的数据：`{'name': 'multiply', 'args': {'a': 123, 'b': 456}}`。
+
+这说明什么？这代表大模型变聪明了。它在推演时发现了两件事：
+1. 自己直接算乘法会胡说八道；
+2. 刚才人类发过来的工具列表里，恰好有一个叫 `multiply` 的工具看起来能解决这个问题。
+
+于是，大模型做出了一个 **Tool Call (工具调用)** 的决策，它的潜台词是：
+_"嗨人类！我闭嘴不回答了。我已经帮你把你问题里的数字提取出来了，我命令你去调用那个叫做 `multiply` 的 Python 函数，参数我都给你配好 a=123, b=456 了。**你把函数跑完之后，再把结果告诉我！**"_
+
+这就是大模型工具调用的真相：**大模型只负责“规划意图”和“提取参数”，具体跑代码、拿结果的粗活，得咱们外部的 Python 程序自己去跑！**
+
+#### 拓展观察：为什么多步计算只返回了一个工具调用？
+
+细心的你可能发现了，用户问的是 `“先算乘法，然后再算加法”`，但大模型只下发了一个 `multiply` 指令。这是因为：
+1. **模型的顺序思维**：模型读懂了“先...然后再...”的逻辑。它知道必须先拿到第一步的乘积结果，才能进行第二步评估。所以它暂时“扣住”了加法任务。
+2. **缺乏执行循环 (Execution Loop)**：在我们的脚本中，向模型请求调用后就结束退出了。在真实的 Agent 中，我们要拿着第一步的结果**再次**去访问大模型，大模型才会下发第二步的加法工具调用。
+
+#### 拓展观察：并行工具调用 (Parallel Tool Calling)
+
+如果我们在 Prompt 里**打破先后顺序约束**，要求模型“同时立刻”做两件事：
+`query2 = "请同时立刻帮我做两件事：计算123*456，以及计算25+13"`
+
+你会惊艳地发现，大模型的 `response.tool_calls` 里同时出现了**两个**独立的指令：一个 `multiply`，一个 `add`！这就是现代旗舰大模型必备的**并行调用能力**，它极大地提高了处理复杂任务的效率！
+
+---
+
+### 步骤 3：实现人机互动的 Tool Execution Loop（执行循环）
+
+在真实场景中，大模型在遇到需要工具的问题时只会返回 `tool_calls` 指令，它没有真正执行代码的能力（即无实体）。我们需要编写代码来接管这些指令，在本地把这些挂载的 Python 函数真正跑起来，然后再把结果作为 `ToolMessage` 喂回给大模型。
+
+**代码实现** (`02_calculator_agent/3_agent_execution_loop.py`)：
+
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.tools import tool
+
+load_dotenv()
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """这是一个乘法器。当你需要计算两个数字相乘时，请调用此工具。"""
+    print(f"\n[🔧 本地工具 multiply 执行中... 检测到参数 a={a}, b={b}]")
+    return a * b
+
+@tool
+def add(a: int, b: int) -> int:
+    """这是一个加法器。请用来计算两个数字相加的和。"""
+    print(f"\n[🔧 本地工具 add 执行中... 检测到参数 a={a}, b={b}")
+    return a + b
+
+tools = [multiply, add]
+tools_by_name = {t.name: t for t in tools}
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+llm_with_tools = llm.bind_tools(tools)
+
+# 1. 模拟第一次提问：包含我们希望模型做多步计算的问题
+messages = [
+    ("user", "先计算123乘以456等于多少？算出结果后，把它加上25。")
+]
+print(f"[用户原始问题]: {messages[0][1]}\n")
+
+# 2. 第一次调用：大模型决定发号施令，给出第一步操作
+print("[第一回合：大模型思考中...]")
+response_message = llm_with_tools.invoke(messages)
+messages.append(response_message) # 把大模型的指令存进聊天记录里
+
+# 3. 检查大模型是不是派发了任务 (tool_calls)
+if response_message.tool_calls:
+    print(f"[大模型决定不直接回答，而是分配了{len(response_message.tool_calls)}个本地工具执行任务]")
+    
+    # 4. 遍历大模型分配给我们的工具调用请求
+    for tool_call in response_message.tool_calls:
+        print(f"👉 决定调用工具: {tool_call['name']}, 参数准备: {tool_call['args']}")
+        tool_name = tool_call['name']
+        tool_args = tool_call['args']
+
+        # 从我们本地注册的工具字典里找到对应的原生 Python 函数
+        selected_tool = tools_by_name[tool_name]
+
+        # 5. 【执行器】真正的动手跑代码发生在这里！
+        tool_result = selected_tool.invoke(tool_args)
+        print(f"[本地代码执行完毕！计算结果直接得出了: {tool_result}]")
+
+        # 6. 【最关键的一步】：必须把计算结果包装成 ToolMessage，喂回给大模型！
+        # 这个动作相当于跟大模型汇报：“首长，工具我替你跑完了，结果是这个，请过目！”
+        from langchain_core.messages import ToolMessage
+        messages.append(ToolMessage(
+            tool_call_id=tool_call['id'], 
+            name=tool_name, 
+            content=str(tool_result) 
+        ))
+        
+    # 7. 第二次调用：大模型根据拿到的工具执行结果继续思考
+    print("\n[第二回合：大模型查收刚才的计算结果报告，并总结最终发言...]")
+    final_response = llm_with_tools.invoke(messages)
+    print("\n🎉【大模型的最终人类自然语言回复】:\n", final_response.content)
+
+else:
+    print("[大模型觉得这个问题不需要使用工具，直接输出自然语言回答]:", response_message.content)
+```
+
+**核心报错与知识点观察**：
+运行这段代码，当你要求“先算乘法，再加25”时，经过两轮通信后 `final_response.content` 依然是空的，而是输出了一个全新的 `tool_call: {'name': 'add'}`！
+这是因为我们代码里的 `if tool_calls:` 判断是**一次性**的。大模型拿到乘法结果后，发现题没做完，于是它下发了第二步指令（加法），但我们的代码在这时候**由于没有 while 循环，直接执行结束了**。
+这也完美引出了**真正的 AI Agent 执行引擎**需要一个专门托管这个复杂死循环的容器！
+
+---
+
+### 步骤 4：引入真正的执行引擎 (AgentExecutor)
+
+**目标**：解决人工硬核编写 `while` 循环去解析、调用、回传 ToolMessage 的繁琐工作。利用 LangChain 内置的 Agent 架构（`create_agent`）实现全自动的“推理-行动”循环。
+
+**代码实现** (`02_calculator_agent/4_langgraph_agent.py`)：
+
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.tools import tool
+# 引入 LangChain 预置的 Agent 循环引擎
+from langchain.agents import create_agent
+
+load_dotenv()
+
+@tool
+def multiply(a: int, b: int) -> int:
+    """这是一个乘法器。当你需要计算两个数字相乘时，请调用此工具。"""
+    print(f"\n[🚀 框架后台自动运行工具 multiply: a={a}, b={b}]")
+    return a * b
+
+@tool
+def add(a: int, b: int) -> int:
+    """这是一个加法器。请用来计算两个数字相加的和。"""
+    print(f"\n[🚀 框架后台自动运行工具 add: a={a}, b={b}]")
+    return a + b
+
+tools = [multiply, add]
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+# 1. 见证奇迹的时刻：把大模型和工具列表打包交给主管引擎
+# create_agent 在后台帮我们写好了无比完备的 while 循环和 tool_message 拼接！
+agent_executor = create_agent(llm, tools)
+
+# 2. 我们只需要像面对一个普通模型那样，给它扔一句话就行了
+query = "先计算123乘以456等于多少？算出结果后，把它加上25。"
+print(f"[用户原始问题]: {query}\n")
+
+# 3. 触发主管引擎运作
+print("正在引擎内全自动多轮激战中，请观察打印日志...")
+response_state = agent_executor.invoke({
+    "messages": [("user", query)]
+})
+
+# 4. 直接获取它循环到底、直到完全算完后得出的最终结论！
+# 框架返回的 state 中包含了所有的流转信息，最后一条 message 就是彻底完工的自然语言回复
+final_response = response_state["messages"][-1]
+print("\n🎉【大模型的最终人类自然语言回复】:\n", final_response.content)
+```
+
+**核心观察与知识点总结**：
+1. **自动死循环 (The ReAct Loop)**：你可以在终端清楚地看到，不需要写任何 `if tool_calls` 或者 `for` 循环，引擎自动连续触发了 `multiply` 和 `add` 两个本地工具。它在后台默默地完成了我们上一步手动做的所有拼装脏活累活。
+2. **Agent 引擎的更新**：在旧版 LangChain 中使用的 `AgentExecutor` 已经被统一整合进了现在的 `langchain.agents.create_agent`。这是目前最标准、最易用的用法。
+3. **Gemini 的结构化返回 (List of Dicts)**：在使用原生 API 特性或特定的 Agent 循环时，Gemini 大模型返回的最终 `content` 可能不再是一个简单的纯字符串，而是由不同内容块组成的列表（List of Dictionaries）。比如 `[{'type': 'text', 'text': '计算结果是...'}]`。这也是自然语言，只不过是带有类型的富文本块。如果想提取纯字符串，可以在代码里直接索引 `final_response.content[0]['text']` 取出纯文本。
+
+---

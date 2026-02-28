@@ -8,7 +8,8 @@ load_dotenv()
 print(f"GEMINI_API_KEY: {os.getenv('GEMINI_API_KEY')}")
 
 # 2. 实例化官方无头 SDK 客户端
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+client = genai.Client()
+# client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 print(f"User input: Explain how AI works in a few words")
 
