@@ -20,8 +20,8 @@ source venv/bin/activate
 您可以根据当前学习的 Phase 逐步安装依赖，也可以现在就安装第一阶段的核心包：
 
 ```bash
-# 安装 LangChain 核心及 OpenAI 官方库
-pip install -U langchain langchain-openai langchain-community 
+# 安装 LangChain 核心及 OpenAI/Google 或其他大模型官方库
+pip install -U langchain google-genai langchain-google-genai python-dotenv 
 ```
 
 *(注：后续阶段如果涉猎 LangGraph, ChromaDB, Tavily 等组件时，对应目录下的文档会提示安装命令。)*

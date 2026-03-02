@@ -7,9 +7,10 @@ description: Automatically update learning_tutorial.md to document theoretical c
 Always automatically apply this workflow when making progress on a project step, resolving a conceptual misunderstanding, modifying code related to the learning path, or summarizing key concepts. 
 
 ### Trigger Conditions
-- When the user successfully runs a new piece of code and asks to move on.
-- When the user asks for a conceptual summary or asks a deep "Why" question about mechanisms (like JSON Parser vs Structured Output).
-- When transitioning to a new step or phase in the `implementation_plan.md` or `task.md`.
+- 🔥 **CRITICAL**: Before starting any new learning phase, project folder, or major step, you MUST proactively trigger this workflow to summarize the *previous* completed topic. Do not wait for the user to ask.
+- When the user successfully runs a new piece of code and confirms understanding.
+- When the user asks for a conceptual summary or asks a deep "Why" question about mechanisms (like parsing formats, schema errors).
+- When transitioning to a new step in `implementation_plan.md` or `task.md`.
 
 ### Steps
 1. Use the `view_file` tool to open and review `/Users/rick/src/myagent/documents/learning_tutorial.md`.

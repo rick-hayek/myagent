@@ -108,7 +108,7 @@ from langchain_core.prompts import ChatPromptTemplate
 load_dotenv()
 
 # 1. 创建一个 LLM 实例
-llm = ChatGoogleGenerativeAI(model="gemini-3-flash")
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
 
 # 2. 创建一个带有 system 设定和 user 动态变量的聊天提示词模板
 prompt = ChatPromptTemplate.from_messages([
@@ -295,7 +295,7 @@ tools = [multiply, add]
 
 print("工具在系统中的名称:", multiply.name)
 print("大模型看到的工具描述说明书:", multiply.description)
-print("\n[底层给大模型看的数据结构 (Schema)]:\n", multiply.args_schema.schema())
+print("\n[底层给大模型看的数据结构 (Schema)]:\n", multiply.args_schema.model_json_schema())
 
 result = multiply.invoke({"a": 3, "b": 4})
 print("\n[本地测试向工具传入参数调用: 3 * 4 =]:", result)
@@ -517,4 +517,112 @@ print("\n🎉【大模型的最终人类自然语言回复】:\n", final_respons
 2. **Agent 引擎的更新**：在旧版 LangChain 中使用的 `AgentExecutor` 已经被统一整合进了现在的 `langchain.agents.create_agent`。这是目前最标准、最易用的用法。
 3. **Gemini 的结构化返回 (List of Dicts)**：在使用原生 API 特性或特定的 Agent 循环时，Gemini 大模型返回的最终 `content` 可能不再是一个简单的纯字符串，而是由不同内容块组成的列表（List of Dictionaries）。比如 `[{'type': 'text', 'text': '计算结果是...'}]`。这也是自然语言，只不过是带有类型的富文本块。如果想提取纯字符串，可以在代码里直接索引 `final_response.content[0]['text']` 取出纯文本。
 
+#### 深度进阶：关于工具调用的 3 个终极拷问
+
+在完成 Agent 基础框架后，我们必须理清以下 3 个极其重要的底层机制：
+
+1. **为什么 `ToolMessage` 必须传 `tool_call_id` 字段？如果去掉会发生什么？**
+   - **底层机制**：`tool_call_id` 是大模型用来“对账”的唯一凭证。大模型可能会一次性下发多个工具调用指令（比如 ID=001 是买苹果，ID=002 是买香蕉）。当你把结果送回去时，如果不带 ID，模型根本不知道你送回来的是苹果的价格还是香蕉的价格。
+
+     **代码演示说明**：
+     ```python
+     # 如果模型并发时发了两个完全同名工具的调用 (tool_calls)
+     [
+         {'name': 'multiply', 'args': {'a': 123, 'b': 456}, 'id': 'id-001'},
+         {'name': 'multiply', 'args': {'a': 7, 'b': 8}, 'id': 'id-002'},
+     ]
+
+     # 错误示例：喂回结果时遗漏 tool_call_id
+     messages.append(ToolMessage(
+         # tool_call_id=tool_call['id'], 🚨 致命错误：这行被注释掉了
+         name=tool_name, 
+         content=str(tool_result) 
+     ))
+     ```
+     > **灵魂拷问**：上面两个调用都叫 `multiply`，当你抽出时间算出 `56` 这个结果打算送回去交差时，模型怎么知道 `56` 是 `id-001` 的答案还是 `id-002` 的答案？
+     > 
+     > 这就是 `tool_call_id` 存在的根本意义。它是**这一次具体执行请求的唯一流水号**。而 `name` 只是工具的一个类别名。两者分工明确：`name` 说明你用了哪个工具，`id` 证明你回答的是哪道题。
+
+   - **后果**：如果去掉，或者填错 ID，大模型所在的 API 服务端会直接抛出 **HTTP 400 Bad Request** 报错，告诉你消息格式损坏或对不上账，直接拒绝回答。这就是严格的协议级约束。
+
+2. **带依赖关系的并行调用 (Parallel Tool Calling) 会同时执行吗？**
+   - **场景**：用户问 `“请计算 123*456+25 的结果”`。模型会同时调用乘法和加法吗？
+   - **机制**：**绝对不会！**因为加法的其中一个参数来自于乘法的结果，这两者在数学逻辑上存在强因果/时序依赖。大模型在“规划(Reasoning)”时非常聪明，它会自动退化为**顺序调用**：先发命令只算乘法 -> 收到人类发回乘法结果 -> 再次发命令算加法。
+   - **只有当任务相互独立时**（例如第一题算乘法，第二题算另一个水果的数量），大模型才会真正并发返回两个 `tool_call`。
+
+3. **如果用户需要的工具我们根本没有提供（比如没提供减法），模型会怎么办？**
+   - **场景**：只给了 `add` 和 `multiply`，但用户问 `25 - 13 等于几`？
+   - **大模型的应对策略（通常会混用）**：
+     - **策略 A（变通 Hacker）**：高级模型（如 Gemini 2.5 Flash / GPT-4）拥有极强的联想能力，它会尝试自己变通，神奇地下发一条指令 `add(a=25, b=-13)` 来强行使用你现有的加法器实现减法！
+     - **策略 B（脑内直出）**：如果问题极度简单（比如 25-13），它评估出“靠自己的词向量就能算出 12，且没有对应工具”，它会跳过 `tool_calls`，直接在自然语言 `response.content` 里回答“等于 12”。
+     - **策略 C（诚实道歉）**：如果问题非常复杂（比如计算复杂的微积分）且没有工具可以变通，它会在自然语言里回复：“抱歉，你没有给我相关的微积分计算工具，我无法保证心算的准确性。”
+
+---
+
+## Phase 3: 工具与开放网络 API 交互 (Weather Agent)
+
+在掌握了本地计算器 Agent 之后，我们需要让 Agent 具备真正的“联网”超能力。本阶段我们调用了真实的第三方公开 API（OpenWeatherMap）。
+
+### 步骤 1：构建具有优雅错误处理的网络 API 工具
+
+在真实工业环境中，调用外部网络 API 充满了不确定性。一个合格的 Agent Tool 必须极度健壮。
+
+**代码实现** (`03_weather_agent/1_weather_tool.py`)：
+```python
+@tool
+def get_weather(city: str) -> str:
+    """这是一个天气查询工具..."""
+    # 坑点 1：API_KEY 配置校验
+    if not openweather_api_key:
+        return "【系统报错返回】由于系统没配置 API KEY，工具不可用。请向用户致歉。"
+    
+    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={openweather_api_key}&units=metric&lang=zh_cn"
+    
+    try:
+        # 坑点 2：极其关键的 timeout，防止 Agent 死循环挂起卡死
+        response = requests.get(url, timeout=5)
+        
+        # 坑点 3：遇到 HTTP 报错（如 404 查无此城、401 鉴权失败）
+        # 千万别直接抛出异常导致进程崩溃，而是把报错用中文告诉大模型，让它转述给用户！
+        if response.status_code == 404:
+            return f"【查询失败】找不到名为 '{city}' 的城市，请让用户核对拼写。"
+            
+        response.raise_for_status()
+        data = response.json()
+        return f"{city} 的当前实况天气：{data['weather'][0]['description']}，气温：{data['main']['temp']}℃"
+        
+    except requests.exceptions.Timeout:
+        return "【网络超时返回】第三方服务耗时过长，请告诉用户网络开小差了。"
+```
+
+### 步骤 2：组装气象 Agent 与底层的动态输出格式解析
+
+当我们把做好的工具交给 `create_agent` 并调用大模型时，会遇到一个非常经典的底层框架解析问题。
+
+**核心观察：大模型返回体 `content` 的类型变频 (List of Dicts vs. String)**
+
+当你连续调用气象 Agent 时，有时打印 `final_response.content` 是一长串类似 JSON 的 `List`（包含 `signature` 等复杂结构），有时却直接是一段干净的 `String`（纯自然语言文本）。
+
+> **这是为什么？**
+> 1. **大模型的动态返回体**：像 Gemini 这类原生多模态模型，标准的响应体本就是一个多内容块列表（List of Blocks）。当它的底层安全检查器生成了数字签名（Signature），或者包含引用元数据时，必须用结构化数据发送。
+> 2. **LangChain 框架的自动折叠 (Auto-folding)**：LangChain 作为中间件，非常聪明但也容易让人迷惑：
+>    - 如果模型返回了复杂的附加物体（如 Signature），LangChain 为了保全数据，会原封不动把 `content` 保持为 `List[Dict]`。
+>    - 如果模型返回得极其干净，纯粹只为了说话，LangChain 会自作主张把它**自动折叠**成一个普通的 `String`。
+
+**💡 工业级的高阶解法（实战代码）**：
+绝对不能在代码里写死 `content[0]['text']`（如果刚好被折叠为 String 会直接代码崩溃），应该使用 `isinstance` 做类型防御：
+
+```python
+# 优雅处理：应对大模型“薛定谔的返回值”类型推断
+content = final_response.content
+
+if isinstance(content, list):
+    # 如果它是复杂列表，遍历寻找 type 为 text 的文本块抽取出来
+    final_text = "".join(block["text"] for block in content if block.get("type") == "text")
+else:
+    # 如果 LangChain 帮我们折叠成了纯字符串，那就直接用！
+    final_text = content
+
+print("\n🎉【大模型的最终人类自然语言回复】:\n", final_text)
+```
 ---

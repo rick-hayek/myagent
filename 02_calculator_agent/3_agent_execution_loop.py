@@ -39,6 +39,7 @@ print(f"[用户原始问题]: {messages[0][1]}\n")
 # 2. 第一次调用：大模型决定发号施令
 print("[第一回合：大模型思考中...]")
 response_message = llm_with_tools.invoke(messages)
+print("第一回合思考返回: ", response_message)
 messages.append(response_message) # Agent 记录了大模型的回复: 把大模型的指令存进聊天记录里
 
 # 3. 检查大模型是不是派发了任务 (tool_calls)
