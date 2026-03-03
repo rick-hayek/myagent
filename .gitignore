@@ -70,3 +70,5 @@ cover/
 # macOS
 .DS_Store
 __pycache__/
+
+chat_history.db

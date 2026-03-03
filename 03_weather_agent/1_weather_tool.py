@@ -11,7 +11,7 @@ print(f"open weather api key: {openweather_api_key}")
 def get_weather(city: str) -> str:
     """这是一个天气查询工具。当你需要查询指定城市的天气时，请调用此工具。
     Args:
-        city: 想要查询的天气城市名称（可接受拼音或英文或部分中文），例如 "Beijing", "London", "ShangHai"
+        city: 想要查询的天气城市名称。⚠️警告：无论用户是用中文还是其他语言提问，你都必须在此处将城市名称翻译为纯英文全拼（如用户问"上海"，这里必须传入"Shanghai"），否则第三方天气接口将返回 404 错误。
     """
     # 坑点 1：缺少 API Key 的优雅处理
     # 不要让程序直接抛出异常崩溃退出（比如直接 raise ValueError），
@@ -54,8 +54,11 @@ def get_weather(city: str) -> str:
 # ================= 简单的本地单测 =================
 # 在不启动大模型的情况下，我们作为"人类"可以直接验证工具函数的健壮性
 if __name__ == "__main__":
-    print("[本地直接传参测试 - 查询真实存在的北京]:")
-    print("工具返回内容 =>", get_weather.invoke({"city": "Beijing"}))
+    print("[本地直接传参测试 - 查询真实存在的上海（英文请求）]:")
+    print("工具返回内容 =>", get_weather.invoke({"city": "Shanghai"}))
     
+    print("[本地直接传参测试 - 查询真实存在的上海（中文请求）]:")
+    print("工具返回内容 =>", get_weather.invoke({"city": "上海"}))
+
     print("\n[本地直接传参测试 - 故意传入一个乱码不存在的城市触发 404]:")
     print("工具返回内容 =>", get_weather.invoke({"city": "Asdfghjkl"}))

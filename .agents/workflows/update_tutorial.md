@@ -8,9 +8,10 @@ Always automatically apply this workflow when making progress on a project step,
 
 ### Trigger Conditions
 - 🔥 **CRITICAL**: Before starting any new learning phase, project folder, or major step, you MUST proactively trigger this workflow to summarize the *previous* completed topic. Do not wait for the user to ask.
-- When the user successfully runs a new piece of code and confirms understanding.
-- When the user asks for a conceptual summary or asks a deep "Why" question about mechanisms (like parsing formats, schema errors).
-- When transitioning to a new step in `implementation_plan.md` or `task.md`.
+- When the user successfully runs a new piece of code and confirms understanding (e.g., says "OK", "Next", "继续", "完成", "OK了", "好了").
+- When the user asks for a conceptual summary or asks a deep "Why" question about mechanisms (like parsing formats, schema errors, or "总结", "为什么").
+- When transitioning to a new step in `implementation_plan.md` or `task.md` (e.g., "开始 Phase X", "进入下一步").
+- 🚨 **MANDATORY**: If the user explicitly asks to update the tutorial (e.g., "更新 tutorial", "总结进 tutorial", "完善一下"), you must run this workflow immediately.
 
 ### Steps
 1. Use the `view_file` tool to open and review `/Users/rick/src/myagent/documents/learning_tutorial.md`.

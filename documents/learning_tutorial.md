@@ -55,11 +55,6 @@ response = client.models.generate_content(
 print(f"AI response: {response.text}")
 ```
 
-**运行命令**：
-```bash
-python3 01_basic_api/1_ai_sdk_call.py
-```
-
 ### 步骤 3：使用 LangChain 调用大模型
 
 **目标**：引入 LangChain 框架，体验它是如何将各种底层的大模型接口（如 Google, OpenAI）抽象包装成统一格式的。
@@ -88,10 +83,6 @@ print("\n [LangChain 返回的完整对象类型]:", type(response))
 print("\n [AI 生成的文本内容]:", response.content)
 ```
 
-**运行命令**：
-```bash
-python3 01_basic_api/2_langchain_basic.py
-```
 **核心观察**：无论底层是哪个模型，LangChain 返回的始终是标准化的 `AIMessage` 对象。
 
 ### 步骤 4：引入提示词模板 (Prompt Templates)
@@ -565,55 +556,86 @@ print("\n🎉【大模型的最终人类自然语言回复】:\n", final_respons
 
 ### 步骤 1：构建具有优雅错误处理的网络 API 工具
 
-在真实工业环境中，调用外部网络 API 充满了不确定性。一个合格的 Agent Tool 必须极度健壮。
+**目标**：演示如何编写一个极度健壮的、带有网络调用防御机制（防超时、防 404 挂起、智能语种转换）的外部 API 工具。
 
 **代码实现** (`03_weather_agent/1_weather_tool.py`)：
 ```python
+import os
+import requests
+from dotenv import load_dotenv
+from langchain_core.tools import tool
+
+load_dotenv()
+openweather_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+
 @tool
 def get_weather(city: str) -> str:
-    """这是一个天气查询工具..."""
-    # 坑点 1：API_KEY 配置校验
+    """这是一个天气查询工具。当你需要查询指定城市的天气时，请调用此工具。
+    Args:
+        city: 想要查询的天气城市名称。⚠️警告：无论用户是用中文还是其他语言提问，你都必须在此处将城市名称翻译为纯英文全拼（如用户问"上海"，这里必须传入"Shanghai"），否则第三方天气接口将返回 404 错误。
+    """
+    # 坑点 1：缺少 API Key 的优雅处理
     if not openweather_api_key:
-        return "【系统报错返回】由于系统没配置 API KEY，工具不可用。请向用户致歉。"
+        return "【系统报错返回】由于系统后台没有配置 OPENWEATHERMAP_API_KEY，工具当前不可用。请向用户致歉。"
     
     url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={openweather_api_key}&units=metric&lang=zh_cn"
-    
+
     try:
-        # 坑点 2：极其关键的 timeout，防止 Agent 死循环挂起卡死
+        # 坑点 2：调用外部网络请求时，务必加 timeout 网络超时时间！防止 Agent 死循环卡死
         response = requests.get(url, timeout=5)
         
-        # 坑点 3：遇到 HTTP 报错（如 404 查无此城、401 鉴权失败）
-        # 千万别直接抛出异常导致进程崩溃，而是把报错用中文告诉大模型，让它转述给用户！
+        # 坑点 3：处理 404 等 HTTP 报错，绝不抛出崩溃，而是以人类自然语言转告大模型
         if response.status_code == 404:
-            return f"【查询失败】找不到名为 '{city}' 的城市，请让用户核对拼写。"
+            return f"【查询失败】[code: 404]找不到气象库中名为 '{city}' 的城市。请让用户核对拼写或尝试英文全拼。"
+        elif response.status_code == 401:
+            return "【查询失败】[code: 401] API Key 鉴权失败。请致歉。"
             
         response.raise_for_status()
+        
         data = response.json()
-        return f"{city} 的当前实况天气：{data['weather'][0]['description']}，气温：{data['main']['temp']}℃"
+        temp = data["main"]["temp"]
+        weather_desc = data["weather"][0]["description"]
+        humidity = data["main"]["humidity"]
+        
+        return f"{city} 的当前实况天气：{weather_desc}，实时气温：{temp}℃，湿度：{humidity}%。你可以基于这些数据自由组合发散回复。"
         
     except requests.exceptions.Timeout:
-        return "【网络超时返回】第三方服务耗时过长，请告诉用户网络开小差了。"
+        return "【网络超时返回】请求第三方天气服务耗时过长。请告诉用户网络开小差了。"
+    except Exception as e:
+        return f"【未知系统错误】调用天气 API 接口时出现代码级崩溃，详情: {str(e)}。"
 ```
 
 ### 步骤 2：组装气象 Agent 与底层的动态输出格式解析
 
-当我们把做好的工具交给 `create_agent` 并调用大模型时，会遇到一个非常经典的底层框架解析问题。
+**目标**：将网络 API 工具注册进大模型，并处理大模型在多模态与纯文本场景下的动态 JSON 结构解析。
 
-**核心观察：大模型返回体 `content` 的类型变频 (List of Dicts vs. String)**
-
-当你连续调用气象 Agent 时，有时打印 `final_response.content` 是一长串类似 JSON 的 `List`（包含 `signature` 等复杂结构），有时却直接是一段干净的 `String`（纯自然语言文本）。
-
-> **这是为什么？**
-> 1. **大模型的动态返回体**：像 Gemini 这类原生多模态模型，标准的响应体本就是一个多内容块列表（List of Blocks）。当它的底层安全检查器生成了数字签名（Signature），或者包含引用元数据时，必须用结构化数据发送。
-> 2. **LangChain 框架的自动折叠 (Auto-folding)**：LangChain 作为中间件，非常聪明但也容易让人迷惑：
->    - 如果模型返回了复杂的附加物体（如 Signature），LangChain 为了保全数据，会原封不动把 `content` 保持为 `List[Dict]`。
->    - 如果模型返回得极其干净，纯粹只为了说话，LangChain 会自作主张把它**自动折叠**成一个普通的 `String`。
-
-**💡 工业级的高阶解法（实战代码）**：
-绝对不能在代码里写死 `content[0]['text']`（如果刚好被折叠为 String 会直接代码崩溃），应该使用 `isinstance` 做类型防御：
-
+**代码实现** (`03_weather_agent/2_weather_agent.py`)：
 ```python
+import os
+import importlib
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain.agents import create_agent
+
+# 因为文件名以数字开头，必须用 importlib 动态绕过 Python 导入限制
+weather_module = importlib.import_module("1_weather_tool")
+get_weather = weather_module.get_weather
+
+load_dotenv()
+tools = [get_weather]
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+agent_executor = create_agent(llm, tools)
+
+query = "我明天打算去北京出差，请帮我查一下那里现在的天气情况，并根据情况给我一些穿衣建议。"
+print(f"[用户原始问题]: {query}\n")
+
+print("正在引擎内全自动多轮激战中，请观察打印日志...")
+response_state = agent_executor.invoke({
+    "messages": [("user", query)]
+})
+
 # 优雅处理：应对大模型“薛定谔的返回值”类型推断
+final_response = response_state["messages"][-1]
 content = final_response.content
 
 if isinstance(content, list):
@@ -625,4 +647,377 @@ else:
 
 print("\n🎉【大模型的最终人类自然语言回复】:\n", final_text)
 ```
+
+**核心观察：大模型返回体 `content` 的类型变频 (List of Dicts vs. String)**
+
+当你连续调用气象 Agent 时，有时打印 `final_response.content` 是一长串类似 JSON 的 `List`（包含 `signature` 等复杂结构），有时却直接是一段干净的 `String`（纯自然语言文本）。
+
+> **这是为什么？**
+> 1. **大模型的动态返回体**：像 Gemini 这类原生多模态模型，标准的响应体本就是一个多内容块列表（List of Blocks）。当它的底层安全检查器生成了数字签名（Signature），或者包含引用元数据时，必须用结构化数据发送。
+> 2. **LangChain 框架的自动折叠 (Auto-folding)**：LangChain 作为中间件，非常聪明但也容易让人迷惑：
+>    - 如果模型返回了复杂的附加物体（如 Signature），LangChain 为了保全数据，会原封不动把 `content` 保持为 `List[Dict]`。
+>    - 如果模型返回得极其干净，纯粹只为了说话，LangChain 会自作主张把它**自动折叠**成一个普通的 `String`。
+
+**💡 工业级的高阶解法**：
+如上方代码所示，绝对不能在代码里写死 `content[0]['text']`。必须使用 `isinstance(content, list)` 做类型防御，这是大模型客户端开发的必修课！
 ---
+
+## 🏆 Phase 2 全体总结与核心收尾
+
+我们通过 `02_calculator_agent` (纯本地计算工具) 和 `03_weather_agent` (网络 API 工具) 完整地打通了 Phase 2 的学习链路。在迈向更高阶的智能体协作（Phase 5 的 ReAct）之前，我们必须在大脑中建立以下三个不可动摇的底层认知：
+
+### 1. Tool Calling (工具调用) 的本质究竟是什么？
+**大模型本身不能也没有权限执行任何一行代码！**
+工具调用的本质，是**一份“外包合同”**。
+当你使用 `.bind_tools()` 将功能暴露给大模型时，你其实只是把这些 Python 函数的“说明书”（Schema，比如需要几个参数、是什么类型、有什么限制）发给了大模型。
+大模型遇到问题时，通过阅读说明书，决定“哦！我做不了，但我算出参数了，包工头（程序）你去帮我跑一下这个叫 `multiply` 的活儿，跑完把结果告诉我”。
+**执行代码的行为永远发生在你的本地环境，大模型只负责“规划意图”和“填参提取”。**
+
+### 2. 本地工具 vs 网络 API 工具的防坑差异
+- **本地工具（如加减乘除）**：相对安全、确定性高。主要防范参数类型报错（比如模型硬塞个字符串给要求 int 的加法器）。
+- **网络 API 工具（如天气查询）**：极其脆弱、随时会挂。
+  - **请求超时 (Timeout)** 必须显式设置，否则整个程序的死循环会被外网卡死。
+  - **API 错误状态码 (404/401)** 绝不能作为 Exception 抛出导致程序崩溃，必须包装成友好的**人类自然语言**（如“找不到这个城市”）发回给大模型。
+  - **利用 Prompt 进行参数约束**：OpenWeatherMap 对中文城市名支持极差（报 404）。最佳实践是直接在 `@tool` 的 `docstring` (说明书) 里写死一句警告：“务必将源地名翻译为纯英文再传入”。因为大模型阅读这段提示词后，拥有极强的中译英能力，这等于白嫖了一层翻译器防崩机制。
+
+### 3. Agent 执行循环 (Execution Loop) 的终极模式
+一个合格的 Agent 绝对不是 `if tool_calls:` 触发一次就结束的单线程脚本。
+它是一个**生生不息的 `while` 死循环 (ReAct Pattern)**：
+
+`获取问题` -> `大模型思考决策` -> `下发指令 (tool_calls)` -> `本地执行代码` -> `把结果装入 ToolMessage 喂回给大模型` -> `大模型重新思考` -> **(循环直至大模型认为不需要再调用工具，直接给出含有了 final_response 的最终回答)**
+
+在工业界，我们不会手写这个复杂且容错率低的死循环，而是直接丢给 `langchain.agents.create_agent` (或底层更强大的 `LangGraph`) 这种图架构引擎去自动化托管。这就构成了现代 AI Agent 最核心的心智模型！
+
+---
+## Phase 3: 上下文与记忆机制 (Memory & Context)
+
+大模型在物理底层是 100% 绝对无状态 (Stateless) 的。每一次 API 请求对它来说都是一次全新的宇宙重启。维持记忆的责任永远在客户端（也就是我们的代码）手里。本阶段我们将探索如何赋予 Agent 长短期的记忆力。
+
+### 步骤 1：体验大模型的“金鱼记忆” (Stateless LLM)
+
+**目标**：直观感受不带任何上下文外挂的裸模型是如何丢失历史对话记忆的。
+
+**代码实现** (`04_memory_chatbot_v1/1_stateless_llm.py`)：
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+
+load_dotenv()
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+print("🤖 聊天机器人已启动 (输入 'quit' 退出)")
+print("-" * 50)
+
+while True:
+    user_input = input("\n你: ")
+    if user_input.lower() == "quit":
+        break
+    
+    # 直接丢给裸模型，没有任何历史记录上下文
+    response = llm.invoke(user_input)
+    print(f"AI: {response.content}\n")
+```
+
+**执行命令**：
+```bash
+python3 04_memory_chatbot_v1/1_stateless_llm.py
+```
+
+**核心观察 / 核心知识点总结**：
+当你第一句话说“我叫XX”，第二句问“我叫什么”时，大模型会直接回答不知道。这说明底层 API 不会为你保存任何会话状态。这也引出了第一个破局思路：人为把前面的聊天记录全部发过去。
+
+### 步骤 2：纯手工打造“人工短期记忆” (Manual Memory)
+
+**目标**：通过在本地 Python 列表里维护历史记录队列，手动在每次提问时将“全部上下文”发给模型，实现人工记忆。
+
+**代码实现** (`04_memory_chatbot_v1/2_manual_memory.py`)：
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import AIMessage, HumanMessage
+
+load_dotenv()
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+# 1. 在客户端维护一个列表，专门用来存储聊天历史
+chat_history = []
+
+print("🤖 聊天机器人已启动 (输入 'quit' 退出)")
+print("-" * 50)
+
+while True:
+    user_input = input("\n你: ")
+    if user_input.lower() == "quit":
+        break
+    
+    # 2. 用户说的话，追加到历史记录里
+    chat_history.append(HumanMessage(content=user_input))
+    
+    # 3. 把累积了所有上下文的完整的 chat_history 列表一股脑发送给模型！
+    response = llm.invoke(chat_history)
+
+    # 4. 把模型的回应也追加到历史记录里，形成闭环！
+    chat_history.append(AIMessage(content=response.content))
+
+    print(f"AI: {response.content}\n")
+    print(f"  [幕后揭秘：当前发送给模型的聊天记录条数：{len(chat_history)} 条]")
+```
+
+**执行命令**：
+```bash
+python3 04_memory_chatbot_v1/2_manual_memory.py
+```
+
+**核心观察 / 核心知识点总结**：
+- **记忆的本质**：我们在每一轮对话中，送给大模型的永远是 `[Msg1, Msg2, Msg3...]` 的全量记录。模型依然是无定式 (stateless) 的，它只是通过阅读你刚刚传过去的所有历史大纲，做出了符合上下文情境的延续性生成。
+- **字典列表 vs Message 对象**：直接传原生的 JSON 字典 `{"role": "user", "content": "..."}` 和传 LangChain 的 `HumanMessage` 对象产生了完全一致的行为。这是因为 `HumanMessage(BaseMessage)` 在底层 `type` 已经被严格定死为 "human"，并在 LangChain 发起底层 API 握手时被转换回了原生字典。之所以坚持使用对象而不是原始字典，是因为 Message 对象能够承载多模态数据（图片）、额外的 kwargs（如示例提示），还可以安全地搭载 ToolMessage 等复杂的系统级结构体。
+
+### 步骤 3：引入自动化记忆胶囊 (RunnableWithMessageHistory)
+
+**目标**：解决手工管理历史记录列表（`chat_history.append(...)`）的繁琐问题，使用 LangChain 的流水线封装胶囊实现记忆管理的自动化。
+
+**代码实现** (`04_memory_chatbot_v1/3_auto_memory.py`)：
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+load_dotenv()
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+store = {}
+
+def get_session_memory(session_id: str):
+    if session_id not in store:
+        store[session_id] = InMemoryChatMessageHistory()
+    return store[session_id]
+
+# 最激动人心的一步：把 "没记忆的 llm" 封装进 "记忆胶囊"
+llm_with_memory = RunnableWithMessageHistory(
+    llm, 
+    get_session_memory 
+)
+
+while True:
+    user_input = input("\nYou: ")
+    if user_input.lower() == "quit":
+        break
+        
+    response = llm_with_memory.invoke(
+        user_input, 
+        config={"configurable": {"session_id": "user_rick"}}
+    )
+    print(f"AI: {response.content}\n")
+```
+
+**执行命令**：
+```bash
+python3 04_memory_chatbot_v1/3_auto_memory.py
+```
+
+**核心观察 / 核心知识点总结**：
+当你抱怨“代码变简单了，但我怎么感觉我只是在学库的用法，大模型底层的行为全被遮蔽了？”时，你触碰到了架构师必须要面对的**“抽象陷阱”**。
+
+无论框架（LangChain, AutoGen, LangGraph）的语法糖多么花哨，它们对记忆的底层处理逻辑有且仅有一种：**在发起 API 请求的那一刻前，将你的新问题与缓存中的旧历史拼接成一个巨型的主题数组（Message List），然后整体发送**。
+
+**终极破局解法：全局透视法**
+为了不被框架绑架，我们可以随时开启“上帝视角”。在任何 LangChain 脚本的顶部（`load_dotenv()` 之前）添加以下两行代码：
+```python
+from langchain_core.globals import set_debug
+set_debug(True)
+```
+控制台会立刻向你展示最赤裸的真相：所有被掩盖的拼装动作、注入的 System Prompt、工具说明书的构造，以及最终通过 HTTP 发送给大模型的浩如烟海的 JSON Payload 会一字不差地打印出来。
+通过 `Debug = True` 模式，我们可以做到**享受框架带来的提效语法糖，但灵魂深处依然死死拿捏住大模型的第一性原理**。
+**实例代码与 Debug 视角对比**
+
+你在终端的交互看起来是连续的：
+```text
+You: Hello，I'm Rick
+AI: Hello Rick! Nice to meet you. I'm an AI assistant. How can I help you today?
+
+You: what is my name?
+AI: Your name is Rick! You told me that earlier.
+```
+
+但在开启 `set_debug(True)` 后的底层视角下，你会看到这一切的虚幻：
+
+**第一回合：**
+当你说出 "Hello, I'm Rick" 时，LangChain 发送的 payload 是干净的：
+```json
+{
+  "prompts": [
+    "Human: Hello，I'm Rick"
+  ]
+}
+```
+
+**第二回合（核心奥秘）：**
+当你说出 "what is my name?" 时，LangChain 触发了 `RunnableWithMessageHistory`。它去内存字典里把之前的对话翻了出来，**生硬地拼装在一起**，最终发给大模型的 payload 变成了这样一个包含所有历史的“巨型 prompt”：
+
+```json
+{
+  "prompts": [
+    "Human: Hello，I'm Rick\nAI: Hello Rick! Nice to meet you.\n\nI'm an AI assistant. How can I help you today?\nHuman: what is my name?"
+  ]
+}
+```
+
+通过这几行日志，你可以清晰地得出结论：**大模型根本没有任何所谓的“记忆”。它只是像做阅读理解一样，在每一回合里重新阅读了由 LangChain 偷偷塞给它的“包含了迄今为止所有聊天记录的一篇长文”而已。**
+
+### 步骤 4：打造可持久化的长期记忆 (Persistent Long-Term Memory)
+
+**目标**：解决内存字典（`InMemoryChatMessageHistory`）在进程被杀死后记忆清空的问题，将用户的聊天记录永久存入本地 SQLite 数据库中。
+
+**代码实现** (`05_memory_chatbot_v2/1_sqlite_memory.py`)：
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables.history import RunnableWithMessageHistory
+# 引入连接硬盘数据库的全新记忆力类
+from langchain_community.chat_message_histories import SQLChatMessageHistory
+from langchain_core.globals import set_debug
+
+set_debug(True)
+load_dotenv()
+
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+def get_session_memory(session_id: str):
+    # 直接返回一个连接到本地 SQLite 数据库的历史记录对象
+    # 如果库或表不存在，它会自动建库建表
+    return SQLChatMessageHistory(
+        session_id=session_id,
+        connection="sqlite:///chat_history.db" # 数据库存放在本地当前目录
+    )
+
+llm_with_memory = RunnableWithMessageHistory(
+    llm,
+    get_session_history=get_session_memory
+)
+
+while True:
+    user_input = input("\nYou: ")
+    if user_input.lower() == "quit":
+        break
+        
+    response = llm_with_memory.invoke(
+        user_input, 
+        config={"configurable": {"session_id": "user_rick"}}
+    )
+    print(f"AI: {response.content}\n")
+```
+
+**执行命令**：
+```bash
+python3 05_memory_chatbot_v2/1_sqlite_memory.py
+```
+
+**核心观察 / 核心知识点总结**：
+如果我们在第一次对话后直接杀死进程，再次启动程序时，Agent 依然能准确叫出我们的名字。
+它的工作流是这样的：
+1. **启动时**：不再创建空的 `store = {}`。
+2. **提问时**：底层的 `SQLChatMessageHistory` 截获 `session_id`（如 "user_rick"），**向本地 SQLite 数据库发起 `SELECT` 查询**，捞出这个用户的过往记录。
+3. **调用 LLM**：将新问题和从数据库捞出的老记录拼装（如步骤 3 所述的 payload 模式）发给 API。
+4. **保存记录**：大模型返回后，再次向数据库发起 `INSERT` 操作，把这轮对话存盘。
+
+由此可见，AI 真正变成了一个带有状态的“后端服务器”应用。它的记忆外挂正式从“内存级”进化到了“工业硬盘数据库级”！
+
+### ⚠️ 工业级隐患：失控的上下文（The Context Window Trap）
+
+现在，你拥有了一个即使关电脑拔电源也不会失忆的机器人。
+**但是，深渊正在凝视着你！**
+假设你和这个机器人就这样日复一日地聊了整整一年，`chat_history.db` 里的记录达到了 10 万条。
+明天你再问它“今天天气如何”的时候，LangChain 的 `RunnableWithMessageHistory` 会做什么？
+
+根据我们在“Debug 真相”里学到的第一性原理：**它会把你以前聊过的所有 10 万条历史记录，和今天的新问题拼在一起，合成一台多达几十万 Token 的“超级巨无霸发送机”，一次性全砸给大模型 API！**
+
+这会导致三种极其惨烈的工业事故：
+1. **超出 Context Window**：API 拒绝响应，直接崩溃报错（比如 `Token Limit Exceeded`）。
+2. **天价账单**：大模型 API 是按 Token 计费的。你每次问一句哪怕只有两个字的新问题，它都会带着前面那十万句废话去请求，你点一下回车键可能就要烧掉几十块钱人民币。
+3. **注意力迷失 (Lost in the Middle)**：业界公认的 LLM 缺陷，当喂给大模型的上下文太长时，它只记得开头和结尾，中间提取信息的准确率会出现断崖式下跌。
+
+这也就是我们 `05_memory_chatbot_v2` 后半部分的终极挑战：
+> 如何既能保住硬盘里的长线历史，又能在发送给大模型 API 时进行截断（Truncation）或摘要浓缩（Summarization）？
+
+### 步骤 5：挽救天价账单 - 历史聊天截断术 (Message Truncation)
+
+**目标**：在发送给大模型之前，通过切断过于久远的历史消息，保持 Payload 大小永远稳定在一个安全、便宜的区间内。
+
+
+
+**代码实现** (`05_memory_chatbot_v2/2_truncate_memory.py`)：
+```python
+import os
+from dotenv import load_dotenv
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import SQLChatMessageHistory
+from langchain_core.messages import trim_messages
+from langchain_core.globals import set_debug
+
+set_debug(True)
+load_dotenv()
+llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash")
+
+# 声明一个记忆修剪器 (Trimmer)
+trimmer = trim_messages(
+    max_tokens=40,   # 为了方便测试，设置得很短
+    strategy="last", # 从后往前数，保留最新消息
+    token_counter=llm, # 把计算每个字占多少 token 的工作交给这门模型自己
+    include_system=True, # 永远保留 System Prompt 
+)
+
+# 使用管道符把 修剪器 和 llm 拼在一起
+chain_with_trimming = trimmer | llm
+
+def get_session_memory(session_id: str):
+    return SQLChatMessageHistory(
+        session_id=session_id,
+        connection="sqlite:///chat_history.db" 
+    )
+
+llm_with_memory = RunnableWithMessageHistory(
+    chain_with_trimming,
+    get_session_history=get_session_memory
+)
+
+while True:
+    user_input = input("\nYou: ")
+    if user_input.lower() == "quit":
+        break
+        
+    response = llm_with_memory.invoke(
+        user_input, 
+        config={"configurable": {"session_id": "user_rick"}}
+    )
+    print(f"AI: {response.content}\n")
+```
+
+**执行命令**：
+```bash
+python3 05_memory_chatbot_v2/2_truncate_memory.py
+```
+
+**核心知识点深挖：Token 到底是怎么计算的？ (`max_tokens=40`)**
+
+在前面的代码中，有一个极其隐蔽但关键的参数：`token_counter=llm`。
+
+1. **什么是 Token？**
+Token 并不是字数，也不是字母数。它是大模型底层识别文本的“最小分词单位”（Subword）。
+粗略估计下：
+- 1 个 Token ≈ 0.75 个英文单词（例如 "hamburger" 可能被切成 "ham", "bur", "ger" 3个 token）
+- 1 个 Token ≈ 0.5 个中文字符（中文分词比英文碎得多，所以中文请求往往更费 token 钱）
+
+2. **为什么计算这么复杂？**
+每一家大模型公司（OpenAI, Google, Anthropic）底层的分词器（Tokenizer）算法都是**完全不一样**的！
+同样一句话 "你好，Rick"，在 OpenAI 家算出来可能是 5 个 token，在 Google 家算出来可能是 8 个 token。
+
+3. **`token_counter=llm` 的妙用**
+正是因为这个原因，LangChain 的 `trim_messages` 不敢自己去瞎算字数。我们必须把 `llm` 对象通过 `token_counter` 传给它。
+在底下，LangChain 会调用这个特定的 `GoogleGenerativeAI` 的官方 Python SDK 提供的方法，去精准计算这条记录在 Google 眼里究竟沾了多少个 Token。
+这样截断出来的大小，才是对这家 API 公司最精确、最安全的防超载边界。
