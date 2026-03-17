@@ -71,4 +71,6 @@ cover/
 .DS_Store
 __pycache__/
 
-chat_history.db
+# test generated data
+chat_history*.db
+my_local_vectordb/
