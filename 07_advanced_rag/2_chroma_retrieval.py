@@ -30,7 +30,11 @@ retriever = vectorstore.as_retriever(
 )
 
 # 抛出一个拥有四个连续大坑的问题
-query = "Rick用大葱换了什么交通工具？它的开机密码是多少？外星人的结局是什么？小明送了什么给 Rick？"
+# 1. Rick用大葱换了什么交通工具？
+# 2. 它的开机密码是多少？
+# 3. 外星人的结局是什么？
+# 4. 米雪和Rick什么关系？ # 这个问题无法从参考资料中获取，看看模型怎么处理
+query = "Rick用大葱换了什么交通工具？它的开机密码是多少？外星人的结局是什么？米雪和Rick什么关系？"
 
 print(f"\\n🔍 收到超级复杂问题: {query}")
 retrieved_docs = retriever.invoke(query)
