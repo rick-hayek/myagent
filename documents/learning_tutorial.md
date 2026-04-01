@@ -1336,3 +1336,68 @@ save_path = os.path.join(os.path.dirname(__file__), filename)
 3. 使用当代最终极的武器 **Tool Calling** 组合了联网搜索和本地文件 IO，真正完成了一个拥有自主思考、搜集资料、写分析报告、保存文件的机器员工闭环！
 
 这标志着你的 Agent 基础课已经彻底通关了！
+
+
+# Phase 6: 多智能体协同 (Multi-Agent Systems)
+
+在掌握了单个复杂 Agent 的构建之后，我们进入了多智能体系统（Multi-Agent Systems）的领域。本阶段我们通过模拟一个微型的软件开发公司，探索多个专注不同职责的 Agent 如何在同一个系统中协同交互，以解决单体大模型无法处理的复杂工程问题。
+
+## 步骤 1：基于 LangGraph 的微型软件公司协同 (Software Company)
+
+**目标**：理解并发与协同。通过构建“产品经理”、“程序员”和“测试员”三个角色节点，以及统一的“公司黑板”（系统状态），演示多智能体框架下的 Actor-Critic 验证闭环。
+
+**核心代码抽象** (`10_dev_team_agents/1_software_company.py`)：
+```python
+# 1. 定义全局共享状态（公司的黑板）
+class TeamState(TypedDict):
+    task: str; prd: str; code: str; feedback: str; iterations: int
+
+# 2. 赋予同一个大模型不同的人设面具
+def product_manager(state): ... # [SysMsg: 你是产品经理] 产出 PRD
+def coder(state): ...           # [SysMsg: 你是程序员] 产出 Code
+def reviewer(state): ...        # [SysMsg: 你是测试员] 产出 Feedback
+
+# 3. 构建工作流与裁决路由
+builder = StateGraph(TeamState)
+builder.add_edge("product_manager", "coder")
+builder.add_edge("coder", "reviewer")
+
+def reviewer_decision(state: TeamState) -> str:
+    # 强制熔断机制：防止两个 AI 吵架陷入死循环
+    if state.get("iterations", 0) >= 3 or "PASS" in state.get("feedback", ""):
+        return "end" # 交付
+    return "continue" # 打回给程序员重写
+
+builder.add_conditional_edges("reviewer", reviewer_decision, {"end": "committer", "continue": "coder"})
+```
+
+**核心观察 / 核心知识点深挖**：
+
+1. **为什么要引入多智能体 (The "Why" of MAS)？**
+   在处理简单任务时，一个全能 Agent 就足够了。但当面临极度复杂的长线任务（如“从零写一个完整的俄罗斯方块游戏”）时，如果强迫一个大模型同时兼顾【需求拆解】、【画 UI】、【写核心逻辑】、【找 Bug】，它会面临严重的**“注意力失焦 (Lost in Context)”**，甚至捡了芝麻丢西瓜。
+   MAS 的本质是**局部降维打击**。我们剥夺了大模型包揽一切的权力，让它在某个特定节点（只负责写文档，或只负责找 Bug）做到极致专注。多个极致的单点组合起来，最终涌现出巨大的系统级智慧。
+
+2. **全局共享状态 (The Shared State Paradigm)**
+   在真实的业务开发中，Agent 之间通常不是通过“互相发微信”来聊天的！而是采用 `StateGraph` 的全局状态容器机制（即代码里的 `TeamState`）。
+   这就像公司会议室里的一块大公用黑板。产品经理拿着需求在黑板上画出 PRD；程序员什么都不管，只看黑板上的 PRD 区域开始写代码；测试员只对比黑板上的 PRD 区和代码区，然后把报错写在 Feedback 区。**各司其职，只读写属于自己的状态切片**，这极大降低了各个 Agent 的上下文污染。
+
+3. **对抗生成与多重验证闭环 (Actor-Critic Pattern)**
+   这是强化学习中极为著名的架构在 Agent 工程里的经典落地。
+   - **行动者 (Actor)**：负责不断输出提议（如 Coder 源源不断地写代码）。
+   - **评论者 (Critic)**：负责严酷地打击与挑剔提议（如 Reviewer 发现任何边界漏洞就打回）。
+   由于 AI 天生容易产生幻觉或短视，由另外一个人设的 AI 来充当裁判，通过不断地【生成 -> 评估 -> 驳回重写 -> 完美】的环形流转，我们能够把最终交付物的质量提升到几乎逼近人类专家的地步。
+
+4. **工业级红线：防熔断控制 (Iteration Guardrails)**
+   永远不要完全信任两个在死循环里打架的 AI！在测试员发现代码有问题并驳回时，如果不加控制，程序员可能会固执己见，测试员也会一直报错，两者能在几分钟内刷爆你几百美金的 API 额度。
+   因此，在条件边 (`Conditional Edges`) 路由判决中增加 `if iterations >= 3` 这类**循环计数器兜底墙**，是所有生产级 Agent 产品必须实装的第一条安全准则。
+
+---
+
+## 🏆 Phase 6 全体总结与核心沉淀
+
+通过实操一个软件公司的多角色协作，你不仅理解了多智能体（Multi-Agent System）在解决超复杂工程时的降维拆解思想，更掌握了 LangGraph 用于实战编排的三件套底层法则：
+1. **基于 TypedDict 的共享状态治理（隔离无用上下文，专注核心决策信息）**。
+2. **通过角色扮演实现逻辑聚合与解耦（利用人设限制一锅乱炖的幻觉）**。
+3. **利用图计算的条件路由机制（Conditional Edges）实现经典的 Actor-Critic 环状自我审阅与修正，辅以迭代计数来做安全兜底防爆**。
+
+到此为止，我们已经在安全的纯内存虚拟环境中实现了多个 AI 的全自动化生产环境验证。在接下来更为硬核的高级进阶阶段（Phase 7），我们将把 Agent 彻底释放出笼——赋予它直接读取本地磁盘沙箱目录文件、修改你的真实代码，甚至在终端执行不可逆 Shell 工具的“究极系统操作权限”！这就要求我们深入钻研 AI 代理开发领域最激动人心的核心命题：**Human-in-the-loop (人类在环互动) 与 高级代理安全。**

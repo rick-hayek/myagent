@@ -2,7 +2,7 @@
 
 **前置依赖**: Phase 2, Phase 5
 
-## 12_coding_assistant_v2 (原 11_coding_assistant_v2)
+## 12_coding_assistant_v2
 
 **目标**: 闭环高阶系统级 Agent 开发，与系统的安全性思考。
 

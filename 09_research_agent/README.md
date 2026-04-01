@@ -2,7 +2,7 @@
 
 **前置依赖**: Phase 1, Phase 2
 
-## 09_research_agent (原 08_research_agent)
+## 09_research_agent
 
 **目标**: 理解并应用经典的 ReAct 模式，让 Agent 具备思考、观察并执行长线任务的复合应用能力。
 

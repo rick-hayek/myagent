@@ -2,7 +2,7 @@
 
 **前置依赖**: Phase 5
 
-## 10_dev_team_agents (原 09_dev_team_agents)
+## 10_dev_team_agents
 
 **目标**: 探索并实践多个专注不同职责的 Agent 如何在系统中协同工作。
 
