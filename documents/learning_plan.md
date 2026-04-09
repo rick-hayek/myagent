@@ -61,7 +61,9 @@
 *   **前置**: Phase 5 (需掌握基本的 LangGraph)
 *   **目录**: `10_dev_team_agents/`
     *   **目标**: 探索多个专注不同职责的 Agent 如何协同工作。
-    *   **内容**: 使用 LangGraph 模拟一个微型开发团队，包含“产品经理”、“程序员”、“测试员” 节点，通过图状态轮转交替完成代码交付。
+    *   **内容**: 
+        1. 使用 LangGraph 模拟一个串行的微型开发团队，包含“产品经理”、“程序员”、“测试员” 节点，通过图状态轮转交替完成代码交付（Actor-Critic 模式）。
+        2. 引入 LangGraph 的 `Send` API，实现前端与后端工程师的**并发执行 (Parallel Execution)**，探索多 Agent 并行协同的图谱。
 
 ### Phase 7: 高级实战项目 (Advanced Projects: System Agents)
 *   **前置**: Phase 2, Phase 5

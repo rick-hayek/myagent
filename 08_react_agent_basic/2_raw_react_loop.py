@@ -78,7 +78,7 @@ for i in range(max_iterations):
 
     print(f"🤖 LLM 输出片段: \n{response.content}")
     content = response.content
-    if(isinstance(content, type([]))):
+    if(isinstance(content, list)):
         output_text = content[0]["text"]
     else:
         output_text = content

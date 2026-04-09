@@ -90,7 +90,7 @@ def committer(state: TeamState):
         final_code = code
 
     # 使用正则剥离出 ```python 里的纯代码
-    match = re.search(r"```python\\n(.*?)\\n```", final_code, re.DOTALL)
+    match = re.search(r"```python\n(.*?)\n```", final_code, re.DOTALL)
     if match:
         final_code = match.group(1)
     else:
@@ -118,7 +118,7 @@ builder.add_node("committer", committer)
 builder.add_edge(START, "product_manager")
 builder.add_edge("product_manager", "coder")
 builder.add_edge("coder", "reviewer")
-builder.add_edge("reviewer", "committer")
+# builder.add_edge("reviewer", "committer") # 🚨 移除该无条件边，因为下方已经定义了条件边
 builder.add_edge("committer", END)
 
 # 核心条件流转：测试员看完之后怎么办？
