@@ -136,48 +136,75 @@ app = builder.compile(
 
 if __name__ == "__main__":
     # 配置必须传入固定的线程 ID 才能激活记忆
-    config = {"configurable": {"thread_id": "hack_session_1"}}
+    config = {"configurable": {"thread_id": "boss_battle_session2"}}
     
-    # 向系统下达可能需要终端执行的指令
-    user_input = "请帮我在当前目录跑一下 python -c 'print(\"Hello Terminal\")'"
-
-    for event in app.stream({"messages": [("user", user_input)]}, config=config, stream_mode="values"):
-        last_message = event["messages"][-1]
-        last_message.pretty_print()
-    
-    # == 第一阶段图执行完毕，拉起了手刹 ==
-    # 大模型已经决议好要调用工具了，现在图卡在了 interrupt_before=["tools"]
-    snapshot = app.get_state(config)
-    next_node = snapshot.next 
-    
-    print(f"\n[系统检查]: 下一个节点是: {next_node}")
-    if next_node and "tools" in next_node:
-        print("\n🚨 [安全警告] AI 正试图执行物理工具（读写或终端命令）！")
-        # 你甚至可以从 snapshot.values 里剥析出它到底要执行什么 shell 语句
-        print(f"\n AI 想要执行的命令是: \n {snapshot.values}")
-        last_ai_message = snapshot.values["messages"][-1]
-        if hasattr(last_ai_message, "tool_calls") and last_ai_message.tool_calls:
-            for tool_call in last_ai_message.tool_calls:
-                print(f" 工具：{tool_call['name']}")
-                print(f" 参数：{tool_call['args']}")
-        
-        user_approval = input("是否准许执行此危险动作？(y/n): ")
-        if user_approval.lower() == 'y':
-           print("\n⚡️ 授权通过，让工具继续执行...")
-           # 关键步骤：调用 .continue() 唤醒被挂起的图
-           for event in app.stream(None, config=config, stream_mode="values"):
-           #for event in app.continue(config, stream_mode="values"):
-               last_message = event["messages"][-1]
-               last_message.pretty_print()
-        else:
-            print("\n❌ 拒绝执行。图已挂起，等待人工指令。")
-    elif next_node and "ask_human" in next_node:
-        print("\n🚨 [安全警告] AI 连续报错 3 次以上，拉起人工介入节点...")
-        help_info = input("连续出错，需给新的提示: ")
-        app.update_state(config, {"messages": [HumanMessage(content=help_info)]})
-        for event in app.stream(None, config=config, stream_mode="values"):
+    # 最终极的闭环提示词！
+    boss_prompt = """
+    这是你的一项独立修复任务：
+    1. 在当前目录下，直接使用终端命令运行 `pytest test_bad_math.py`。
+    2. 你一定会看到测试报错（因为源文件坏了）。请不要向我解释，立刻使用读取文件工具查看 `bad_math.py` 的源码。
+    3. 分析它为什么通不过那些报错的测试用例。
+    4. 使用写文件工具，把修复好 Bug 的代码覆写进 `bad_math.py` 里。
+    5. 再次运行 `pytest test_bad_math.py` 验证你的修复结果。
+    6. 如果还是报错，继续重复步骤2-5。如果你最终看见了全绿的 PASS，就可以告诉我任务完成了！
+    """
+    print("\n🚀 [系统准备] 准备将任务发送给大模型，这可能需要一些时间（尤其是网络较慢时）...")
+    try:
+        for event in app.stream({"messages": [("user", boss_prompt)]}, config=config, stream_mode="values"):
+            print("\n⚡️ [系统接收] 收到图流转的新事件！")
             last_message = event["messages"][-1]
             last_message.pretty_print()
+    except Exception as e:
+        print(f"\n❌ [系统崩溃] 执行时发生异常: {e}")
+    
+    print("\n🛑 [第一阶段结束] 准备进入循环拦截...")
+    
+    # == 第一阶段图执行完毕，拉起了手刹 ==
+    # 大模型一旦决议要调用工具，图就会卡在 interrupt_before=["tools"]，并退出 stream
+    # ⚠️ 核心修复：因为 AI 会进行【多次】反思和工具调用，我们必须用 while 循环不断拦截并授权！
+    while True:
+        print("STARTING WHILE LOOP")
+        snapshot = app.get_state(config)
+        next_node = snapshot.next 
+        print(f"\n\nIN WHILE: snapshot: {snapshot}")
+        print(f"\n\nIN WHILE: next_node: {next_node}")
+
+        if not next_node:
+            print("\n🎉 [图流转结束] 没有任何后续节点需要执行了。任务完成！")
+            break
+            
+        print(f"\n[系统检查]: 下一个被挂起的节点是: {next_node}")
+        
+        if "tools" in next_node:
+            print("\n🚨 [安全警告] AI 正试图执行物理工具（读写或终端命令）！")
+            last_ai_message = snapshot.values["messages"][-1]
+            if hasattr(last_ai_message, "tool_calls") and last_ai_message.tool_calls:
+                for tool_call in last_ai_message.tool_calls:
+                    print(f" 工具：{tool_call['name']}")
+                    print(f" 参数：{tool_call['args']}")
+            
+            user_approval = input("是否准许执行此危险动作？(y/n) [输入 q 退出]: ")
+            if user_approval.lower() == 'q':
+                break
+            elif user_approval.lower() == 'y':
+                print("\n⚡️ 授权通过，让工具继续执行...")
+                # 唤醒图，跑完工具后，它会自动流向 LLM，如果 LLM 还要跑工具，就会再次触发中断并进入下一个 while 循环
+                for event in app.stream(None, config=config, stream_mode="values"):
+                    last_message = event["messages"][-1]
+                    last_message.pretty_print()
+            else:
+                print("\n❌ 拒绝执行。图已挂起，等待人工指令。")
+                break
+                
+        elif "ask_human" in next_node:
+            print("\n🚨 [安全警告] AI 连续报错 3 次以上，拉起人工介入节点...")
+            help_info = input("连续出错，需给新的提示 [输入 q 退出]: ")
+            if help_info.lower() == 'q':
+                break
+            app.update_state(config, {"messages": [HumanMessage(content=help_info)]})
+            for event in app.stream(None, config=config, stream_mode="values"):
+                last_message = event["messages"][-1]
+                last_message.pretty_print()
 
         
             
