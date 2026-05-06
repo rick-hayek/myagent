@@ -1549,3 +1549,56 @@ if next_node and "tools" in next_node:
 **人类在环（Human-in-the-Loop）不仅是 Agent 发挥物理破坏力前的免责安全带，更是处理一切极硬核代码死结的回调神隐操作！最高段位的 Agent，不在于它从不出错，而在于它懂得利用有营养的报错修正行为，以及拥有不弄坏宿主的安全底线。**
 
 ---
+
+# Phase 8: 评估与追踪 (Evaluation & Tracing)
+
+这是 Agent 开发生命周期的最后一环。当你把 Agent 从玩具变成工业级产品时，不可控的“黑盒”执行过程和高昂的 Token 成本会成为最大的隐患。
+
+## 步骤 1：全局透视监控 (LangSmith)
+
+**目标**：无侵入式地监控 Agent 图流转的每一个细节。
+
+无需修改任何业务代码，只要在 `.env` 中声明三个全局变量，底层所有的 API 调用链、Agent 思考耗时、甚至精确到个位数的 Token 计费，都会直接镜像上传到 LangSmith 控制台：
+```env
+LANGCHAIN_TRACING_V2="true"
+LANGCHAIN_API_KEY="..."
+LANGCHAIN_PROJECT="my_agent_project"
+```
+**工业级价值**：这是复盘 `While True` 死循环、定位 Agent 到底在哪个工具调用卡壳的最强手段。如果没有追踪系统，Agent 的黑盒调试会演变成一场噩梦。
+
+## 步骤 2：LLM 自动化裁判长 (LLM-as-a-Judge)
+
+**目标**：解决复杂 Agent 产出物难以被传统单元测试量化评估的难题。
+
+**核心代码抽象** (`13_agent_evaluation/1_llm_judge.py`)：
+```python
+# 1. 结构化输出：强制裁判交出标准答卷
+class GradeResult(BaseModel):
+    score: int = Field(...)
+    reason: str = Field(...)
+
+# 2. 裁判核心特质：强制降温！
+# 普通模型 temperature 默认为 0.7，而作为裁判模型必须是 0.0，以保证每次打分绝对稳定！
+judge_llm = ChatGoogleGenerativeAI(model=..., temperature=0.0)
+structured_judge = judge_llm.with_structured_output(GradeResult)
+
+# 3. 编写严谨的判卷尺度 (Rubric)
+eval_prompt = (
+    f"【评分标准 (Rubric)】\n"
+    f"- 90-100：算法逻辑完全正确...\n"
+    f"- 70-89：逻辑跑通但存在性能问题...\n"
+    f"- 0-69：存在严重逻辑漏洞，或调用内置 API 耍小聪明...\n"
+)
+```
+
+**核心知识点深挖**：
+1. **为什么要用大模型当裁判？** 在 Phase 7 中，Agent 可能写出了 10 种不同风格的代码，只要它们都能通过 `pytest` 测试，都是好代码。传统代码比对（Diff）无法做这种语义级正确性的评分，只有更聪明的大模型能做到。
+2. **`temperature=0.0` 的绝对必要性**：评测最忌讳的是“薛定谔的分数”。降温能强制收束模型的发散性，让它在面对同样的拉垮代码时，今天和明天打出的分数完全一致。
+3. **Rubric（打分量表）**：Prompt 工程的顶峰。不要只对裁判说“请打分”，必须像给人类助教发判卷指南一样，把每一档位分数的特征精确描绘出来，这是对抗幻觉判卷的唯一法门。
+
+---
+
+# 🎓 教程全剧终 (Curriculum Completed)
+
+从最基础的 API 聊天，到内存共享、自主调用搜索引擎、再到多智能体并发协同、系统级文件/终端权限操作（并辅以人类在环的断点审批），最后以企业级评估监控系统收尾。
+你已经完整通关了 Agent 架构师的“九阴真经”！现在，你不仅会用上层框架，更懂得了如何手撕底层节点编排与安全防线。属于你的大航海时代，正式开启！
